@@ -20,9 +20,13 @@ class BatchSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
     def validate_status(self, value):
-        if self.instance is None and value != Batch.Status.PLANNED:
+        creatable_statuses = {
+            Batch.Status.PLANNED,
+            Batch.Status.ONGOING,
+        }
+        if self.instance is None and value not in creatable_statuses:
             raise serializers.ValidationError(
-                "New batches must start in Planned status."
+                "New batches must have Planned or Ongoing status."
             )
         return value
 

@@ -1,6 +1,6 @@
 import type { AxiosResponse } from 'axios'
 import api from './api'
-import type { Batch, CreateBatchPayload, PaginatedResponse } from '../types/batch'
+import type { Batch, BatchStatus, CreateBatchPayload, PaginatedResponse } from '../types/batch'
 export { getApiErrorMessage } from './api'
 
 export async function getBatches(signal?: AbortSignal): Promise<Batch[]> {
@@ -36,6 +36,16 @@ export async function getBatches(signal?: AbortSignal): Promise<Batch[]> {
 
 export async function createBatch(payload: CreateBatchPayload): Promise<Batch> {
   const response = await api.post<Batch>('/batches/', payload)
+  return response.data
+}
+
+export async function updateBatch(id: number, payload: CreateBatchPayload): Promise<Batch> {
+  const response = await api.put<Batch>(`/batches/${id}/`, payload)
+  return response.data
+}
+
+export async function updateBatchStatus(id: number, status: BatchStatus): Promise<Batch> {
+  const response = await api.patch<Batch>(`/batches/${id}/`, { status })
   return response.data
 }
 

@@ -2,18 +2,21 @@ import { useCallback, useEffect, useState } from 'react'
 import { BatchTable } from '../components/BatchTable'
 import { CreateBatchModal } from '../components/CreateBatchModal'
 import { Icon } from '../components/Icon'
-import { createBatch, deleteBatch, getApiErrorMessage, getBatches } from '../services/batches'
-import type { Batch, CreateBatchPayload } from '../types/batch'
+import { createBatch, deleteBatch, getApiErrorMessage, getBatches, updateBatch, updateBatchStatus } from '../services/batches'
+import type { Batch, BatchStatus, CreateBatchPayload } from '../types/batch'
 
 export function MyBatchesPage() {
   const [batches, setBatches] = useState<Batch[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
+  const [batchToEdit, setBatchToEdit] = useState<Batch | null>(null)
   const [batchToDelete, setBatchToDelete] = useState<Batch | null>(null)
   const [deleteSubmitting, setDeleteSubmitting] = useState(false)
   const [deleteError, setDeleteError] = useState('')
   const [notice, setNotice] = useState('')
+  const [statusError, setStatusError] = useState('')
+  const [isStatusUpdating, setIsStatusUpdating] = useState(false)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -54,6 +57,19 @@ export function MyBatchesPage() {
     }
   }
 
+  async function handleUpdate(payload: CreateBatchPayload) {
+    if (!batchToEdit) return
+    try {
+      const updated = await updateBatch(batchToEdit.id, payload)
+      setBatches((current) => current.map((batch) => batch.id === updated.id ? updated : batch))
+      setBatchToEdit(null)
+      setNotice('Batch updated successfully.')
+      window.setTimeout(() => setNotice(''), 3500)
+    } catch (error) {
+      throw new Error(getApiErrorMessage(error), { cause: error })
+    }
+  }
+
   async function handleDelete() {
     if (!batchToDelete) return
     setDeleteSubmitting(true)
@@ -68,6 +84,19 @@ export function MyBatchesPage() {
       setDeleteError(getApiErrorMessage(error))
     } finally {
       setDeleteSubmitting(false)
+    }
+  }
+
+  async function handleStatusChange(batch: Batch, status: BatchStatus) {
+    setStatusError('')
+    setIsStatusUpdating(true)
+    try {
+      const updated = await updateBatchStatus(batch.id, status)
+      setBatches((current) => current.map((item) => item.id === updated.id ? updated : item))
+    } catch (error) {
+      setStatusError(getApiErrorMessage(error))
+    } finally {
+      setIsStatusUpdating(false)
     }
   }
 
@@ -91,6 +120,7 @@ export function MyBatchesPage() {
             <p>Your batches from the learning platform.</p>
           </div>
         </div>
+        {statusError && <p className="form-error status-update-error" role="alert">{statusError}</p>}
 
         {loadError ? (
           <div className="load-error" role="alert">
@@ -102,7 +132,10 @@ export function MyBatchesPage() {
         ) : (
           <BatchTable
             batches={batches}
+            onEdit={setBatchToEdit}
             onDelete={(batch) => { setDeleteError(''); setBatchToDelete(batch) }}
+            onStatusChange={handleStatusChange}
+            isStatusUpdating={isStatusUpdating}
           />
         )}
       </section>
@@ -111,6 +144,14 @@ export function MyBatchesPage() {
 
       {notice && <div className="toast" role="status"><Icon name="check" size={17} />{notice}</div>}
       {modalOpen && <CreateBatchModal onClose={() => setModalOpen(false)} onSubmit={handleCreate} />}
+      {batchToEdit && (
+        <CreateBatchModal
+          key={batchToEdit.id}
+          batch={batchToEdit}
+          onClose={() => setBatchToEdit(null)}
+          onSubmit={handleUpdate}
+        />
+      )}
       {batchToDelete && (
         <div className="modal-backdrop" onMouseDown={(event) => {
           if (event.target === event.currentTarget && !deleteSubmitting) setBatchToDelete(null)

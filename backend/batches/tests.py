@@ -109,6 +109,8 @@ class BatchCrudAndValidationTests(APITestCase):
             format="json",
         )
         self.assertEqual(ongoing.status_code, status.HTTP_200_OK)
+        ongoing_refresh = self.client.get(f"/api/batches/{batch_id}/")
+        self.assertEqual(ongoing_refresh.data["status"], Batch.Status.ONGOING)
 
         completed = self.client.patch(
             f"/api/batches/{batch_id}/",
@@ -116,6 +118,8 @@ class BatchCrudAndValidationTests(APITestCase):
             format="json",
         )
         self.assertEqual(completed.status_code, status.HTTP_200_OK)
+        completed_refresh = self.client.get(f"/api/batches/{batch_id}/")
+        self.assertEqual(completed_refresh.data["status"], Batch.Status.COMPLETED)
 
         deleted = self.client.delete(f"/api/batches/{batch_id}/")
         self.assertEqual(deleted.status_code, status.HTTP_204_NO_CONTENT)
@@ -134,6 +138,27 @@ class BatchCrudAndValidationTests(APITestCase):
             response.data["detail"],
             "Ongoing batches cannot be deleted. Cancel or complete the batch first.",
         )
+
+    def test_invalid_batch_updates_are_rejected_without_changing_existing_values(self):
+        batch = Batch.objects.create(**self.payload)
+        invalid_updates = (
+            {"end_date": "2026-11-30"},
+            {"max_students": 0},
+            {"max_students": 501},
+        )
+
+        for update in invalid_updates:
+            with self.subTest(update=update):
+                response = self.client.patch(
+                    f"/api/batches/{batch.pk}/",
+                    update,
+                    format="json",
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+                batch.refresh_from_db()
+                self.assertEqual(batch.end_date.isoformat(), self.payload["end_date"])
+                self.assertEqual(batch.max_students, self.payload["max_students"])
 
     def test_invalid_dates_and_capacity_are_rejected(self):
         invalid_payloads = [
@@ -174,22 +199,54 @@ class BatchCrudAndValidationTests(APITestCase):
             "Capacity cannot exceed 500 students.",
         )
 
-    def test_new_batches_must_start_planned(self):
-        for invalid_status in (
+    def test_allowed_statuses_are_saved_and_returned_in_batch_list(self):
+        create_statuses = (
+            Batch.Status.PLANNED,
             Batch.Status.ONGOING,
-            Batch.Status.COMPLETED,
-            Batch.Status.CANCELLED,
+        )
+        for index, batch_status in enumerate(create_statuses, start=1):
+            payload = {
+                **self.payload,
+                "batch_code": f"AI-2026-{index:02d}",
+                "status": batch_status,
+            }
+            with self.subTest(status=batch_status):
+                response = self.client.post("/api/batches/", payload, format="json")
+                self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+                self.assertEqual(response.data["status"], batch_status)
+                self.assertEqual(
+                    Batch.objects.get(pk=response.data["id"]).status,
+                    batch_status,
+                )
+
+        list_response = self.client.get("/api/batches/")
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        listed_statuses = {
+            batch["batch_code"]: batch["status"]
+            for batch in list_response.data["results"]
+        }
+        for index, batch_status in enumerate(create_statuses, start=1):
+            self.assertEqual(listed_statuses[f"AI-2026-{index:02d}"], batch_status)
+
+    def test_completed_and_cancelled_statuses_cannot_be_set_on_new_batches(self):
+        for index, invalid_status in enumerate(
+            (Batch.Status.COMPLETED, Batch.Status.CANCELLED),
+            start=1,
         ):
             with self.subTest(status=invalid_status):
                 response = self.client.post(
                     "/api/batches/",
-                    {**self.payload, "status": invalid_status},
+                    {
+                        **self.payload,
+                        "batch_code": f"INVALID-{index}",
+                        "status": invalid_status,
+                    },
                     format="json",
                 )
                 self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
                 self.assertEqual(
                     response.data["status"][0],
-                    "New batches must start in Planned status.",
+                    "New batches must have Planned or Ongoing status.",
                 )
 
         omitted_status = {key: value for key, value in self.payload.items() if key != "status"}
@@ -201,20 +258,66 @@ class BatchCrudAndValidationTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["status"], Batch.Status.PLANNED)
 
-    def test_invalid_status_transition_is_rejected(self):
-        batch = Batch.objects.create(
-            **{**self.payload, "status": Batch.Status.COMPLETED},
+    def test_approved_status_transitions_persist_after_refresh(self):
+        allowed_transitions = (
+            (Batch.Status.PLANNED, Batch.Status.ONGOING),
+            (Batch.Status.PLANNED, Batch.Status.CANCELLED),
+            (Batch.Status.ONGOING, Batch.Status.COMPLETED),
+            (Batch.Status.ONGOING, Batch.Status.CANCELLED),
         )
+        for index, (current_status, next_status) in enumerate(allowed_transitions, start=1):
+            batch = Batch.objects.create(
+                **{
+                    **self.payload,
+                    "batch_code": f"TRANSITION-{index:02d}",
+                    "status": current_status,
+                },
+            )
+            with self.subTest(current=current_status, next=next_status):
+                response = self.client.patch(
+                    f"/api/batches/{batch.pk}/",
+                    {"status": next_status},
+                    format="json",
+                )
+                self.assertEqual(response.status_code, status.HTTP_200_OK)
+                self.assertEqual(response.data["status"], next_status)
 
-        response = self.client.patch(
-            f"/api/batches/{batch.pk}/",
-            {"status": Batch.Status.PLANNED},
-            format="json",
+                refreshed = self.client.get(f"/api/batches/{batch.pk}/")
+                self.assertEqual(refreshed.status_code, status.HTTP_200_OK)
+                self.assertEqual(refreshed.data["status"], next_status)
+
+                batch.refresh_from_db()
+                self.assertEqual(batch.status, next_status)
+
+    def test_invalid_and_terminal_status_transitions_are_rejected_by_api(self):
+        invalid_transitions = (
+            (Batch.Status.PLANNED, Batch.Status.COMPLETED),
+            (Batch.Status.ONGOING, Batch.Status.PLANNED),
+            (Batch.Status.COMPLETED, Batch.Status.PLANNED),
+            (Batch.Status.COMPLETED, Batch.Status.ONGOING),
+            (Batch.Status.COMPLETED, Batch.Status.CANCELLED),
+            (Batch.Status.CANCELLED, Batch.Status.PLANNED),
+            (Batch.Status.CANCELLED, Batch.Status.ONGOING),
+            (Batch.Status.CANCELLED, Batch.Status.COMPLETED),
         )
+        for index, (current_status, next_status) in enumerate(invalid_transitions, start=1):
+            batch = Batch.objects.create(
+                **{
+                    **self.payload,
+                    "batch_code": f"INVALID-TRANSITION-{index:02d}",
+                    "status": current_status,
+                },
+            )
+            with self.subTest(current=current_status, next=next_status):
+                response = self.client.patch(
+                    f"/api/batches/{batch.pk}/",
+                    {"status": next_status},
+                    format="json",
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        batch.refresh_from_db()
-        self.assertEqual(batch.status, Batch.Status.COMPLETED)
+                refreshed = self.client.get(f"/api/batches/{batch.pk}/")
+                self.assertEqual(refreshed.data["status"], current_status)
 
     def test_database_constraints_reject_invalid_batch_data(self):
         with self.assertRaises(IntegrityError), transaction.atomic():

@@ -1,11 +1,24 @@
 import { useState, type FormEvent } from 'react'
 import { Icon } from './Icon'
-import { MAX_BATCH_STUDENTS, type CreateBatchPayload } from '../types/batch'
+import { MAX_BATCH_STUDENTS, type Batch, type BatchStatus, type CreateBatchPayload } from '../types/batch'
 import { normalizeBatchDates } from '../utils/batchDates'
+
+const createStatusOptions: { value: BatchStatus; label: string }[] = [
+  { value: 'PLANNED', label: 'Planned' },
+  { value: 'ONGOING', label: 'Ongoing' },
+]
+
+const statusLabels: Record<BatchStatus, string> = {
+  PLANNED: 'Planned',
+  ONGOING: 'Ongoing',
+  COMPLETED: 'Completed',
+  CANCELLED: 'Cancelled',
+}
 
 interface CreateBatchModalProps {
   onClose: () => void
   onSubmit: (payload: CreateBatchPayload) => Promise<void>
+  batch?: Batch
 }
 
 const initialForm: CreateBatchPayload = {
@@ -17,8 +30,16 @@ const initialForm: CreateBatchPayload = {
   status: 'PLANNED',
 }
 
-export function CreateBatchModal({ onClose, onSubmit }: CreateBatchModalProps) {
-  const [form, setForm] = useState<CreateBatchPayload>(initialForm)
+export function CreateBatchModal({ onClose, onSubmit, batch }: CreateBatchModalProps) {
+  const isEditing = Boolean(batch)
+  const [form, setForm] = useState<CreateBatchPayload>(() => batch ? {
+    name: batch.name,
+    batch_code: batch.batch_code,
+    start_date: batch.start_date,
+    end_date: batch.end_date,
+    max_students: batch.max_students,
+    status: batch.status,
+  } : initialForm)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
@@ -54,13 +75,13 @@ export function CreateBatchModal({ onClose, onSubmit }: CreateBatchModalProps) {
         className="modal-card"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="create-batch-title"
+        aria-labelledby="batch-form-title"
       >
         <div className="modal-heading">
           <div>
             <span className="eyebrow">BATCH MANAGEMENT</span>
-            <h2 id="create-batch-title">Create a new batch</h2>
-            <p>Set up a learning group and invite students later.</p>
+            <h2 id="batch-form-title">{isEditing ? 'Edit batch' : 'Create a new batch'}</h2>
+            <p>{isEditing ? 'Update the batch details. Change its status from the batch list.' : 'Set up a learning group and invite students later.'}</p>
           </div>
           <button type="button" className="icon-button modal-close" onClick={onClose} aria-label="Close modal" disabled={submitting}>
             <Icon name="close" size={19} />
@@ -123,12 +144,33 @@ export function CreateBatchModal({ onClose, onSubmit }: CreateBatchModalProps) {
               placeholder="YYYY-MM-DD"
             />
           </label>
+          <label className="form-field form-field-wide">
+            <span>Status</span>
+            <select
+              value={form.status}
+              disabled={isEditing}
+              onChange={(event) => {
+                const selectedStatus = createStatusOptions.find(
+                  (option) => option.value === event.currentTarget.value,
+                )
+                if (selectedStatus) update('status', selectedStatus.value)
+              }}
+            >
+              {isEditing
+                ? <option value={form.status}>{statusLabels[form.status]}</option>
+                : createStatusOptions.map(({ value, label }) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+            </select>
+          </label>
 
           {error && <p className="form-error form-field-wide" role="alert">{error}</p>}
           <div className="modal-footer form-field-wide">
             <button type="button" className="button button-secondary" onClick={onClose} disabled={submitting}>Cancel</button>
             <button type="submit" className="button button-primary" disabled={submitting}>
-              {submitting ? 'Creating…' : <><Icon name="plus" size={17} /> Create batch</>}
+              {submitting
+                ? isEditing ? 'Saving…' : 'Creating…'
+                : isEditing ? 'Save changes' : <><Icon name="plus" size={17} /> Create batch</>}
             </button>
           </div>
         </form>
